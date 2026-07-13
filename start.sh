@@ -36,4 +36,4 @@ if ! python3 -c "import fastapi" 2>/dev/null; then
 fi
 
 # ─── Start server ───────────────────────────────────────────────
-exec python3 -m uvicorn server.main:app --host "$HOST" --port "$PORT" --log-level info
+exec python3 -m uvicorn server.main:app --host "$HOST" --port 9090 --log-level info

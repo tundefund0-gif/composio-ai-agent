@@ -36,7 +36,7 @@ class Config:
     composio_api_key: str = field(default_factory=lambda: os.getenv("COMPOSIO_API_KEY", ""))
     composio_base_url: str = field(default_factory=lambda: os.getenv("COMPOSIO_BASE_URL", "https://backend.composio.dev"))
     host: str = field(default_factory=lambda: os.getenv("HOST", "0.0.0.0"))
-    port: int = field(default_factory=lambda: int(os.getenv("PORT", "8000")))
+    port: int = field(default_factory=lambda: int(os.getenv("PORT", "9090")))
 
 
 config = Config()
