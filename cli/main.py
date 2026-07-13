@@ -16,7 +16,7 @@ from core.llm_client import LLMResponse
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger("zen-agent")
 
-app = typer.Typer(name="zen", help="Zen Agent — AI assistant with 1,000+ Composio tools", add_completion=False, no_args_is_help=True)
+app = typer.Typer(name="zen", help="Zen Agent — AI assistant with 1,000+ Composio tools", add_completion=False, no_args_is_help=False)
 
 
 @app.callback(invoke_without_command=True)
