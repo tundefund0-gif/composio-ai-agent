@@ -72,7 +72,7 @@ html,body{height:100%;overflow:hidden;font-family:'Inter',system-ui,sans-serif;b
 .badge-err{background:rgba(239,68,68,0.12);color:var(--error)}
 
 /* ─── Main Area ────────────────────────────────────────────── */
-.main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;height:100vh}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;height:100%;position:relative}
 
 /* Top Bar */
 .topbar{padding:12px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-shrink:0;flex-grow:0;background:var(--bg)}
@@ -92,11 +92,11 @@ html,body{height:100%;overflow:hidden;font-family:'Inter',system-ui,sans-serif;b
 .page::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 
 /* ─── Chat Page ────────────────────────────────────────────── */
-.chat-page{flex:1;overflow:hidden;display:none;flex-direction:column;min-height:0}
+.chat-page{flex:1;overflow:hidden;display:none;flex-direction:column;min-height:0;height:0}
 .chat-page.visible{display:flex}
 
 /* Welcome Screen */
-.welcome{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 20px;text-align:center;gap:12px;min-height:0}
+.welcome{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 20px;text-align:center;gap:12px;min-height:0;overflow-y:auto}
 .welcome h2{font-size:1.4rem;font-weight:700;letter-spacing:-0.02em}
 .welcome p{color:var(--text2);font-size:0.85rem;max-width:400px}
 .welcome-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;width:100%;max-width:520px;margin-top:12px}
@@ -207,7 +207,7 @@ html,body{height:100%;overflow:hidden;font-family:'Inter',system-ui,sans-serif;b
 .thinking-body{max-height:0;overflow:hidden;transition:max-height 0.3s ease,padding 0.3s ease;padding:0 14px;font-size:0.76rem;line-height:1.6;color:var(--text2);white-space:pre-wrap;word-break:break-word}
 .thinking-body.open{max-height:500px;padding:12px 14px;overflow:auto;border-top:1px solid var(--border)}
 
-.input-area{padding:16px 20px;border-top:1px solid var(--border);flex-shrink:0;flex-grow:0;background:var(--bg)}
+.input-area{padding:16px 20px;border-top:1px solid var(--border);flex-shrink:0;flex-grow:0;background:var(--bg);position:relative;z-index:2}
 .input-bar{
   background:var(--surface);border:1px solid var(--border);border-radius:12px;
   display:flex;align-items:flex-end;gap:8px;padding:10px 14px;transition:border-color 0.2s;
@@ -329,12 +329,21 @@ select{appearance:none;cursor:pointer;background-image:url("data:image/svg+xml,%
   .chat-page .messages{padding:16px}
   .input-area{padding:12px}
 }
-@media(max-width:500px){
-  .sidebar{position:fixed;top:0;left:0;height:100%;z-index:100;transform:translateX(-100%)}
-  .sidebar.mobile-open{transform:translateX(0)}
+@media(max-width:600px){
+  .sidebar{position:fixed;top:0;left:0;height:100%;z-index:100;transform:translateX(-100%);width:280px!important}
+  .sidebar.mobile-open{transform:translateX(0);box-shadow:4px 0 20px rgba(0,0,0,0.5)}
   .sidebar.collapsed{transform:translateX(-100%);width:var(--sidebar-w)}
   .page-inner{padding:20px 14px}
   .action-grid{grid-template-columns:1fr 1fr}
+  .welcome-grid{grid-template-columns:1fr 1fr}
+  .welcome{padding:20px 16px}
+  .welcome h2{font-size:1.1rem}
+  .msg-bubble{padding:10px 14px;font-size:0.85rem}
+  .topbar{padding:10px 14px}
+}
+@media(max-width:400px){
+  .welcome-grid{grid-template-columns:1fr}
+  .welcome-card{padding:10px}
 }
 </style>
 </head>
@@ -505,7 +514,27 @@ function toggleTheme() {
 // ─── Sidebar Toggle ─────────────────────────────────────────
 function toggleSidebar() {
   const sb = document.getElementById('sidebar');
+  const isOpen = sb.classList.contains('mobile-open');
   sb.classList.toggle('mobile-open');
+  // Add/remove overlay
+  let overlay = document.getElementById('sidebarOverlay');
+  if (!isOpen) {
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'sidebarOverlay';
+      overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:99;display:none';
+      overlay.onclick = () => toggleSidebar();
+      document.body.appendChild(overlay);
+    }
+    overlay.style.display = 'block';
+  } else {
+    if (overlay) overlay.style.display = 'none';
+  }
+}
+
+// Auto-collapse sidebar on mobile
+if (window.innerWidth <= 600) {
+  document.getElementById('sidebar').classList.remove('mobile-open');
 }
 
 // ─── Pages ──────────────────────────────────────────────────
