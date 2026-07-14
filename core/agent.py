@@ -309,16 +309,20 @@ Current UTC time: {datetime.now(timezone.utc).isoformat()}
         # Check for DSML/XML tool calls in text content (model may output them as text)
         dsml_calls = _parse_dsml_tool_calls(resp.content) if resp.content else None
         if dsml_calls:
-            logger.info("Parsed %d DSML tool calls from text response", len(dsml_calls))
+            logger.info("DSML fallback: parsed %d tool calls from text", len(dsml_calls))
             resp.tool_calls = dsml_calls
-            # Clean DSML markup from content
             resp.message["content"] = _strip_dsml_tags(resp.content) or None
             resp.content = resp.message["content"] or ""
             return self._handle_tools(resp, msgs)
         self._messages.append({"role": "assistant", "content": resp.content})
         return resp
 
-    def _handle_tools(self, resp: LLMResponse, msgs: List[Dict]) -> LLMResponse:
+    def _handle_tools(self, resp: LLMResponse, msgs: List[Dict], _depth: int = 0) -> LLMResponse:
+        if _depth > 5:
+            logger.warning("Tool call depth exceeded, stopping")
+            final = resp
+            self._messages.append({"role": "assistant", "content": final.content or ""})
+            return final
         msgs.append(resp.message)
         self._messages.append(resp.message)
         for tc in resp.tool_calls or []:
@@ -333,6 +337,15 @@ Current UTC time: {datetime.now(timezone.utc).isoformat()}
             msgs.append(tool_msg)
             self._messages.append(tool_msg)
         final = self._llm.chat(msgs, retries=1)
+        # Check if final response has DSML tool calls (model may output them as text)
+        dsml_calls = _parse_dsml_tool_calls(final.content) if not final.tool_calls and final.content else None
+        if dsml_calls:
+            logger.info("DSML in _handle_tools final: %d tools, depth=%d", len(dsml_calls), _depth)
+            final.tool_calls = dsml_calls
+            final.message["content"] = _strip_dsml_tags(final.content) or None
+            final.content = final.message["content"] or ""
+            msgs.append(final.message)
+            return self._handle_tools(final, msgs, _depth + 1)
         self._messages.append({"role": "assistant", "content": final.content})
         return final
 
