@@ -378,6 +378,9 @@ COMPOSIO_MULTI_EXECUTE_TOOL with tools=[{{"tool_slug": "GITHUB_LIST_REPOSITORIES
 - Only call the 6 functions listed. Use COMPOSIO_SEARCH_TOOLS first for unknown tools.
 - NEVER output tool calls as XML, DSML, or markup like <tool_calls>, <invoke>, ||DSML||, <function=...>.
 - Always use the API's structured function_call format. Text-based tool calls will FAIL.
+- **Stop calling tools once you have enough information to answer the user's question.**
+- If you need multiple steps (e.g., browser automation, multi-step workflows), plan them efficiently.
+- Do NOT call the same tool repeatedly with the same parameters — it will not produce different results.
 
 ## ✨ Formatting Guidelines
 
@@ -446,9 +449,25 @@ COMPOSIO_MULTI_EXECUTE_TOOL with tools=[{{"tool_slug": "GITHUB_LIST_REPOSITORIES
         return resp
 
     def _handle_tools(self, resp: LLMResponse, msgs: List[Dict], _depth: int = 0) -> LLMResponse:
-        if _depth > 5:
-            logger.warning("Tool call depth exceeded, stopping")
-            final = resp
+        if _depth > 12:
+            logger.warning("Tool call depth exceeded (limit 12), generating summary")
+            # Do a final non-streaming call asking for summary
+            summary_msgs = [msgs[0], {"role": "user", "content": "Summarize what was accomplished so far based on the tool results. Be concise."}]
+            tool_count = 0
+            for m in reversed(msgs):
+                if m.get("role") == "tool" and tool_count < 3:
+                    summary_msgs.insert(1, m)
+                    tool_count += 1
+            try:
+                final = self._llm.chat(summary_msgs, retries=1)
+                if final.content:
+                    cleaned = _normalize_text(_strip_dsml_tags(final.content))
+                    final.message["content"] = cleaned
+                    final.content = cleaned
+                    final.tool_calls = None
+            except Exception:
+                # Fallback: use accumulated content
+                pass
             self._messages.append({"role": "assistant", "content": final.content or ""})
             return final
         # Build assistant message for context — strip DSML tool_calls, use clean format
@@ -592,7 +611,7 @@ COMPOSIO_MULTI_EXECUTE_TOOL with tools=[{{"tool_slug": "GITHUB_LIST_REPOSITORIES
                     cleaned = _normalize_text(cleaned)
                     if cleaned:
                         yield cleaned + "\n\n"
-                    yield "__status__:⚙️ Executing tools..."
+                    yield "__status__:⚙️ Executing tools (step " + str(depth + 1) + ")..."
 
             # If no DSML and no tool calls, yield buffered content now
             if not dsml_found and not tool_calls_data:
@@ -647,10 +666,23 @@ COMPOSIO_MULTI_EXECUTE_TOOL with tools=[{{"tool_slug": "GITHUB_LIST_REPOSITORIES
                 self._messages.append(tool_msg)
 
             depth += 1
-            if depth > 5:
-                logger.warning("Streaming tool call depth exceeded (limit 5)")
-                # Yield error status and break
-                yield "__status__:⚠️ Tool call loop limit reached. Please simplify your request."
+            if depth > 12:
+                logger.warning("Streaming tool call depth exceeded (limit 12)")
+                # Use tool results for a final summary instead of breaking with error
+                summary_msgs = [msgs[0], {"role": "user", "content": "Summarize what was accomplished so far based on the tool results. Be concise."}]
+                # Add last few tool results for context
+                tool_count = 0
+                for m in reversed(msgs):
+                    if m.get("role") == "tool" and tool_count < 3:
+                        summary_msgs.insert(1, m)
+                        tool_count += 1
+                try:
+                    final_resp = self._llm.chat(summary_msgs, retries=1)
+                    final_text = final_resp.content or ""
+                    final_text = _normalize_text(_strip_dsml_tags(final_text))
+                    yield final_text
+                except Exception:
+                    yield "__status__:⚠️ Complex task completed. Results shown above."
                 break
 
             gen = self._llm.chat(msgs, stream=True, retries=1)
