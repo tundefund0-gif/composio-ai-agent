@@ -15,6 +15,87 @@ from core.llm_client import LLMClient, LLMResponse, LLMError
 
 logger = logging.getLogger("zen-agent")
 
+
+
+def _parse_dsml_tool_calls(text):
+    """Parse DSML/XML formatted tool calls from model text output.
+    
+    Handles formats like:
+      <tool_calls><invoke name="TOOL">...</invoke></tool_calls>
+      <||DSML||tool_calls>...</||DSML||tool_calls>
+    """
+    import re as _re
+    if not text:
+        return None
+    
+    # Match common patterns for tool call wrappers
+    # Pattern: <tool_calls>...</tool_calls> or <||DSML||tool_calls>...</||DSML||tool_calls>
+    outer = _re.search(
+        _re.compile(
+            "<" + "(?:[" + chr(124) + "][" + chr(124) + "]DSML[" + chr(124) + "][" + chr(124) + "])?"
+            "tool_calls[^>]*>(.*?)</"
+            "(?:[" + chr(124) + "][" + chr(124) + "]DSML[" + chr(124) + "][" + chr(124) + "])?tool_calls[^>]*>",
+            _re.DOTALL
+        ),
+        text
+    )
+    inner = outer.group(1) if outer else text
+    
+    # Parse individual <invoke> tags
+    tag_re = _re.compile(
+        "<" + "(?:[" + chr(124) + "][" + chr(124) + "]DSML[" + chr(124) + "][" + chr(124) + "])?"
+        "invoke" + chr(32) + "+name=" + chr(34) + "([a-zA-Z_]\\w*)" + chr(34)
+        + "[^>]*>(.*?)</"
+        + "(?:[" + chr(124) + "][" + chr(124) + "]DSML[" + chr(124) + "][" + chr(124) + "])?invoke[^>]*>",
+        _re.DOTALL
+    )
+    invokes = tag_re.findall(inner)
+    if not invokes:
+        return None
+    
+    param_re = _re.compile(
+        "<" + "(?:[" + chr(124) + "][" + chr(124) + "]DSML[" + chr(124) + "][" + chr(124) + "])?"
+        "parameter" + chr(32) + "+name=" + chr(34) + "([a-zA-Z_]\\w*)" + chr(34)
+        + "[^>]*>(.*?)</"
+        + "(?:[" + chr(124) + "][" + chr(124) + "]DSML[" + chr(124) + "][" + chr(124) + "])?parameter[^>]*>",
+        _re.DOTALL
+    )
+    
+    calls = []
+    for name, body in invokes:
+        params = param_re.findall(body)
+        args = {}
+        for pname, pval in params:
+            pval = pval.strip()
+            try:
+                args[pname] = json.loads(pval)
+            except Exception:
+                args[pname] = pval
+        calls.append({
+            "id": "call_" + str(abs(hash(name)) % 10**6),
+            "type": "function",
+            "function": {"name": name, "arguments": json.dumps(args)},
+        })
+    return calls if calls else None
+
+
+def _strip_dsml_tags(text):
+    """Remove DSML/XML markup from text, keeping only natural language content."""
+    import re as _re
+    prefix = "(?:[" + chr(124) + "][" + chr(124) + "]DSML[" + chr(124) + "][" + chr(124) + "])?"
+    text = _re.sub(
+        _re.compile("<" + prefix + "tool_calls[^>]*>.*?</" + prefix + "tool_calls[^>]*>", _re.DOTALL),
+        "",
+        text,
+    )
+    text = _re.sub(
+        _re.compile("<" + prefix + "invoke[^>]*>.*?</" + prefix + "invoke[^>]*>", _re.DOTALL),
+        "",
+        text,
+    )
+    return text.strip()
+
+
 META_TOOL_DEFS = [
     {
         "type": "function",
@@ -225,6 +306,15 @@ Current UTC time: {datetime.now(timezone.utc).isoformat()}
         resp = self._llm.chat(msgs, tools=META_TOOL_DEFS, retries=2)
         if resp.tool_calls:
             return self._handle_tools(resp, msgs)
+        # Check for DSML/XML tool calls in text content (model may output them as text)
+        dsml_calls = _parse_dsml_tool_calls(resp.content) if resp.content else None
+        if dsml_calls:
+            logger.info("Parsed %d DSML tool calls from text response", len(dsml_calls))
+            resp.tool_calls = dsml_calls
+            # Clean DSML markup from content
+            resp.message["content"] = _strip_dsml_tags(resp.content) or None
+            resp.content = resp.message["content"] or ""
+            return self._handle_tools(resp, msgs)
         self._messages.append({"role": "assistant", "content": resp.content})
         return resp
 
@@ -271,6 +361,63 @@ Current UTC time: {datetime.now(timezone.utc).isoformat()}
                     yield token
 
             if not tool_calls_data:
+                # Check for DSML/XML tool calls in streamed text content
+                dsml_calls = _parse_dsml_tool_calls(full_content) if full_content else None
+                if dsml_calls:
+                    logger.info("Stream: parsed %d DSML tool calls from text", len(dsml_calls))
+                    self._messages.append({"role": "assistant", "content": _strip_dsml_tags(full_content) or None})
+                    # Convert dsml_calls to the format expected by the tool loop
+                    tool_calls_data = []
+                    for tc in dsml_calls:
+                        try:
+                            args = json.loads(tc["function"]["arguments"])
+                        except json.JSONDecodeError:
+                            args = {}
+                        tool_calls_data.append({
+                            "id": tc["id"],
+                            "function": {
+                                "name": tc["function"]["name"],
+                                "arguments": tc["function"]["arguments"],
+                            },
+                        })
+                    # Continue to tool execution loop instead of breaking
+                    assistant_msg = {
+                        "role": "assistant",
+                        "content": _strip_dsml_tags(full_content) or None,
+                        "tool_calls": [],
+                    }
+                    for tc in dsml_calls:
+                        entry = {
+                            "id": tc["id"],
+                            "type": "function",
+                            "function": {
+                                "name": tc["function"]["name"],
+                                "arguments": tc["function"]["arguments"],
+                            },
+                        }
+                        assistant_msg["tool_calls"].append(entry)
+                    msgs.append(assistant_msg)
+                    self._messages.append(assistant_msg)
+                    # Execute tools and loop
+                    for tc in tool_calls_data:
+                        fn = tc["function"]["name"]
+                        try:
+                            args = json.loads(tc["function"]["arguments"])
+                        except json.JSONDecodeError:
+                            args = {}
+                        result = self._exec_composio(fn, args)
+                        result_str = json.dumps(result, default=str)[:config.max_tool_results_length]
+                        tool_msg = {
+                            "role": "tool",
+                            "tool_call_id": tc.get("id", f"call_{abs(hash(str(tc))) % 10**6}"),
+                            "content": result_str,
+                        }
+                        msgs.append(tool_msg)
+                        self._messages.append(tool_msg)
+                    gen = self._llm.chat(msgs, stream=True, retries=1)
+                    if not isinstance(gen, Generator):
+                        break
+                    continue
                 self._messages.append({"role": "assistant", "content": full_content})
                 break
 
