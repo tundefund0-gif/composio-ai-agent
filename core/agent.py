@@ -19,6 +19,9 @@ logger = logging.getLogger("zen-agent")
 
 def _parse_dsml_tool_calls(text):
     """Parse DSML/XML formatted tool calls from model text output.
+    # Normalize Unicode look-alikes: fullwidth vertical line -> standard pipe
+    if text:
+        text = text.replace(chr(0xFF5C), chr(0x007C))
     
     Handles formats like:
       <tool_calls><invoke name="TOOL">...</invoke></tool_calls>
@@ -80,7 +83,9 @@ def _parse_dsml_tool_calls(text):
 
 
 def _strip_dsml_tags(text):
-    """Remove DSML/XML markup from text, keeping only natural language content."""
+    """Remove DSML/XML markup from text.
+    if text:
+        text = text.replace(chr(0xFF5C), chr(0x007C)), keeping only natural language content."""
     import re as _re
     prefix = "(?:[" + chr(124) + "][" + chr(124) + "]DSML[" + chr(124) + "][" + chr(124) + "])?"
     text = _re.sub(
@@ -337,10 +342,10 @@ Current UTC time: {datetime.now(timezone.utc).isoformat()}
             msgs.append(tool_msg)
             self._messages.append(tool_msg)
         final = self._llm.chat(msgs, retries=1)
-        # Check if final response has DSML tool calls (model may output them as text)
+        # Check if final response has DSML/XML tool calls (model outputs them as text)
         dsml_calls = _parse_dsml_tool_calls(final.content) if not final.tool_calls and final.content else None
         if dsml_calls:
-            logger.info("DSML in _handle_tools final: %d tools, depth=%d", len(dsml_calls), _depth)
+            logger.info("DSML: executing %d tools from text (depth=%d)", len(dsml_calls), _depth)
             final.tool_calls = dsml_calls
             final.message["content"] = _strip_dsml_tags(final.content) or None
             final.content = final.message["content"] or ""

@@ -190,8 +190,14 @@ async def chat(req: ChatReq):
         resp = agent.chat(req.message)
         if not isinstance(resp, LLMResponse):
             raise HTTPException(500, "Internal error")
+        # DEBUG: dump exact content
+        import logging as _lg2
+        _c = resp.content or ''
+        _lg2.getLogger("zen-server").info("API content_len=%d", len(_c))
+        _lg2.getLogger("zen-server").info("API content_repr=%s", repr(_c[:300]))
+        _lg2.getLogger("zen-server").info("API has_dsml=%s", str('<tool_calls>' in _c))
         return ChatResp(
-            response=resp.content or "",
+            response=_c or "",
             reasoning=resp.reasoning[:3000] if resp.reasoning else "",
             session_id=agent.session_id or "",
             user_id=req.user_id,
