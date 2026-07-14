@@ -57,11 +57,13 @@ class LLMClient:
     """Client for OpenAI-compatible chat APIs with retry & long text support."""
 
     def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None,
-                 model: Optional[str] = None, max_tokens: Optional[int] = None):
+                 model: Optional[str] = None, max_tokens: Optional[int] = None,
+                 timeout: Optional[float] = None):
         self.api_key = api_key or config.opencode_api_key
         self.base_url = (base_url or config.opencode_base_url).rstrip("/")
         self.model = model or config.opencode_model
         self.max_tokens = max_tokens or config.opencode_max_tokens
+        self.timeout = timeout or config.llm_timeout
         # Fallback model support
         self.fallback_model = config.opencode_fallback_model or None
         self.fallback_base_url = config.opencode_fallback_base_url or None
@@ -144,7 +146,7 @@ class LLMClient:
             self.api_key = original_key
 
     def _sync(self, body: Dict) -> LLMResponse:
-        with httpx.Client(timeout=config.llm_timeout) as cl:
+        with httpx.Client(timeout=self.timeout) as cl:
             r = cl.post(f"{self.base_url}/chat/completions", json=body, headers=self._headers())
             if r.status_code >= 400:
                 raise self._http_error(r)
@@ -152,7 +154,7 @@ class LLMClient:
 
     def _stream(self, body: Dict) -> Generator[str, None, None]:
         """Stream tokens. Also captures tool calls and emits __tool_calls__:... when detected."""
-        with httpx.Client(timeout=config.llm_timeout) as cl:
+        with httpx.Client(timeout=self.timeout) as cl:
             with cl.stream("POST", f"{self.base_url}/chat/completions", json=body, headers=self._headers()) as r:
                 if r.status_code >= 400:
                     r.read()
@@ -229,6 +231,12 @@ class LLMClient:
             body: Any = resp.json()
         except Exception:
             body = resp.text
+        # Include model name in error for easier debugging
+        if isinstance(body, dict):
+            if self.model:
+                body = {**body, "_model": self.model}
+            if self.fallback_model:
+                body = {**body, "_fallback": self.fallback_model}
 
         retry_after = self._retry_after(resp.headers.get("retry-after"))
         retryable = self._is_retryable(resp.status_code, body, retry_after)

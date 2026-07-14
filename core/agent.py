@@ -648,7 +648,9 @@ COMPOSIO_MULTI_EXECUTE_TOOL with tools=[{{"tool_slug": "GITHUB_LIST_REPOSITORIES
 
             depth += 1
             if depth > 5:
-                logger.warning("Streaming tool call depth exceeded")
+                logger.warning("Streaming tool call depth exceeded (limit 5)")
+                # Yield error status and break
+                yield "__status__:⚠️ Tool call loop limit reached. Please simplify your request."
                 break
 
             gen = self._llm.chat(msgs, stream=True, retries=1)

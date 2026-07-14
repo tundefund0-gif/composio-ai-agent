@@ -111,6 +111,11 @@ html,body{height:100%;overflow:hidden;font-family:'Inter',system-ui,sans-serif;b
 .cursor{display:inline-block;width:2px;height:1em;background:var(--accent);animation:blink 0.7s step-end infinite;vertical-align:text-bottom;margin-left:2px}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
 
+/* Code copy button */
+.code-copy-btn{position:absolute;top:4px;right:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text2);cursor:pointer;font-size:0.7rem;padding:2px 6px;opacity:0;transition:opacity 0.2s;z-index:2;line-height:1.4}
+.msg-bubble div:hover > .code-copy-btn,.msg-bubble pre:hover + .code-copy-btn,.code-copy-btn:hover{opacity:1}
+.code-copy-btn:hover{background:var(--accent-subtle);color:var(--accent)}
+
 /* Status messages */
 .msg.status{padding:4px 16px;text-align:center;display:flex;justify-content:center}
 .status-badge{display:inline-block;background:var(--accent-subtle);color:var(--accent);border:1px solid var(--accent);border-radius:20px;padding:4px 14px;font-size:0.75rem;font-weight:500;letter-spacing:0.01em;animation:fadeIn 0.3s ease}
@@ -260,14 +265,14 @@ select:focus,input:focus{border-color:var(--accent)}
         <h2>🧠 Zen Agent</h2>
         <p>23,790 tools across 1,000+ apps. Ask me anything.</p>
         <div class="welcome-grid">
-          <div class="welcome-card" onclick="sendSuggestion('What GitHub tools are available?')">
+          <div class="welcome-card" onclick="sendSuggestion('List my GitHub repositories')">
             <div class="wc-icon">🐙</div><div class="wc-title">GitHub</div><div class="wc-desc">Search integrations</div>
           </div>
           <div class="welcome-card" onclick="sendSuggestion('Write Python code to analyze a CSV')">
             <div class="wc-icon">🐍</div><div class="wc-title">Write Code</div><div class="wc-desc">Python sandbox</div>
           </div>
           <div class="welcome-card" onclick="sendSuggestion('Help me organize my Gmail inbox')">
-            <div class="wc-icon">📧</div><div class="wc-title">Gmail</div><div class="wc-desc">Email tools</div>
+            <div class="wc-icon">📧</div><div class="wc-title">Send Email</div><div class="wc-desc">Send an email via Gmail</div>
           </div>
           <div class="welcome-card" onclick="sendSuggestion('Search Slack for project updates')">
             <div class="wc-icon">💬</div><div class="wc-title">Slack</div><div class="wc-desc">Messaging</div>
@@ -388,6 +393,7 @@ function toggleSidebar() {
   else openSidebar();
 }
 document.getElementById('sidebarOverlay').addEventListener('click', closeSidebar);
+document.getElementById('sidebarOverlay').addEventListener('touchstart', e => { if (e.target === e.currentTarget) closeSidebar(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSidebar(); });
 
 function switchPage(name) {
@@ -778,7 +784,7 @@ function updateStatus(text) {
 function renderMarkdown(text) {
   if (!text) return '';
   let html = escHtml(text);
-  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code class="lang-$1">$2</code></pre>');
+  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, '<div style="position:relative"><button class="code-copy-btn" onclick="copyCode(this)">📋</button><pre><code class="lang-$1">$2</code></pre></div>');
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
   html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
   html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
@@ -797,6 +803,16 @@ function renderMarkdown(text) {
   html = '<p>' + html + '</p>';
   html = html.replace(/<p><\/p>/g, '');
   return html;
+}
+
+function copyCode(btn) {
+  const pre = btn.closest('div').querySelector('pre code');
+  if (!pre) return;
+  const text = pre.textContent || '';
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = '✅';
+    setTimeout(() => btn.textContent = '📋', 2000);
+  }).catch(() => {});
 }
 
 function escHtml(t) {

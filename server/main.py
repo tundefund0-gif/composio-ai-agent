@@ -266,6 +266,7 @@ async def search_tools(query: str, user_id: str = "web-user"):
 @app.get("/api/config")
 async def get_config():
     return {
+        "version": "3.2.0",
         "model": config.opencode_model,
         "fallback_model": config.opencode_fallback_model or None,
         "max_tokens": config.opencode_max_tokens,
@@ -273,6 +274,8 @@ async def get_config():
         "data_dir": config.data_dir,
         "rate_limit": config.rate_limit_per_minute,
         "max_message_length": config.max_message_length,
+        "request_timeout": config.request_timeout,
+        "llm_timeout": config.llm_timeout,
     }
 
 
