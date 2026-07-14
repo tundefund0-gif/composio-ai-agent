@@ -85,17 +85,12 @@ def _strip_dsml_tags(text):
     if text:
         text = text.replace(chr(0xFF5C), chr(0x007C))
     import re as _re
-    prefix = "(?:[" + chr(124) + "][" + chr(124) + "]DSML[" + chr(124) + "][" + chr(124) + "])?"
-    text = _re.sub(
-        _re.compile("<" + prefix + "tool_calls[^>]*>.*?</" + prefix + "tool_calls[^>]*>", _re.DOTALL),
-        "",
-        text,
-    )
-    text = _re.sub(
-        _re.compile("<" + prefix + "invoke[^>]*>.*?</" + prefix + "invoke[^>]*>", _re.DOTALL),
-        "",
-        text,
-    )
+    # Match tags with optional pipe decoration: <||DSML||tool_calls||>, <||tool_calls>, <tool_calls>
+    _pipes = "[" + chr(124) + chr(0xFF5C) + "]*"  # zero or more pipe chars (standard or fullwidth)
+    _dsml = "(?:" + _pipes + "DSML" + _pipes + ")?"  # optional ||DSML|| prefix
+    _tag = lambda name: "<" + _pipes + _dsml + name + _pipes + "[^>]*>.*?</" + _pipes + _dsml + name + _pipes + "[^>]*>"
+    text = _re.sub(_re.compile(_tag("tool_calls"), _re.DOTALL), "", text)
+    text = _re.sub(_re.compile(_tag("invoke"), _re.DOTALL), "", text)
     return text.strip()
 
 
