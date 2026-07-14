@@ -210,6 +210,7 @@ Current UTC time: {datetime.now(timezone.utc).isoformat()}
 
     def _handle_tools(self, resp: LLMResponse, msgs: List[Dict]) -> LLMResponse:
         msgs.append(resp.message)
+        self._messages.append(resp.message)
         for tc in resp.tool_calls or []:
             fn = tc["function"]["name"]
             try:
@@ -218,7 +219,9 @@ Current UTC time: {datetime.now(timezone.utc).isoformat()}
                 args = {}
             result = self._exec_composio(fn, args)
             result_str = json.dumps(result, default=str)[:config.max_tool_results_length]
-            msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": result_str})
+            tool_msg = {"role": "tool", "tool_call_id": tc["id"], "content": result_str}
+            msgs.append(tool_msg)
+            self._messages.append(tool_msg)
         final = self._llm.chat(msgs, retries=1)
         self._messages.append({"role": "assistant", "content": final.content})
         return final
@@ -252,9 +255,6 @@ Current UTC time: {datetime.now(timezone.utc).isoformat()}
                 break
 
             # Execute tools and loop
-            if full_content.strip():
-                msgs.append({"role": "assistant", "content": full_content})
-
             assistant_msg = {
                 "role": "assistant",
                 "content": full_content.strip() or None,
@@ -273,6 +273,7 @@ Current UTC time: {datetime.now(timezone.utc).isoformat()}
                 assistant_msg["tool_calls"].append(entry)
 
             msgs.append(assistant_msg)
+            self._messages.append(assistant_msg)
 
             for tc in tool_calls_data:
                 fn = tc["function"]["name"]
@@ -282,11 +283,13 @@ Current UTC time: {datetime.now(timezone.utc).isoformat()}
                     args = {}
                 result = self._exec_composio(fn, args)
                 result_str = json.dumps(result, default=str)[:config.max_tool_results_length]
-                msgs.append({
+                tool_msg = {
                     "role": "tool",
                     "tool_call_id": tc.get("id", f"call_{abs(hash(str(tc))) % 10**6}"),
                     "content": result_str,
-                })
+                }
+                msgs.append(tool_msg)
+                self._messages.append(tool_msg)
 
             gen = self._llm.chat(msgs, stream=True, retries=1)
             if not isinstance(gen, Generator):

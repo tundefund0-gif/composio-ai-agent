@@ -40,7 +40,7 @@ cp .env.example .env
 ./start.sh
 # OR: python3 -m server.main
 # OR: python3 run.py web
-# Open http://localhost:8000
+# Open http://localhost:9090
 ```
 
 ### 4. Run CLI Mode

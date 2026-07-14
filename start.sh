@@ -10,12 +10,12 @@ cd "$DIR"
 
 # ─── Configuration ──────────────────────────────────────────────
 # These can be overridden via environment variables
-export OPENGATE_API_KEY="${OPENGATE_API_KEY:-sk-tiThifcpL4GFv4p64g2raHxUiOwy9Ajm58mQ63rBGzCSkuLYlr9BGFTgeEE20onH}"
-export COMPOSIO_API_KEY="${COMPOSIO_API_KEY:-ak_AOwLDMGqjZFztZYfAYgD}"
+export OPENGATE_API_KEY="${OPENGATE_API_KEY:-}"
+export COMPOSIO_API_KEY="${COMPOSIO_API_KEY:-}"
 export OPENGATE_BASE_URL="${OPENGATE_BASE_URL:-https://opencode.ai/zen/v1}"
 export OPENGATE_MODEL="${OPENGATE_MODEL:-deepseek-v4-flash-free}"
 export HOST="${HOST:-0.0.0.0}"
-export PORT="${PORT:-8000}"
+export PORT="${PORT:-9090}"
 
 # ─── Verify keys ───────────────────────────────────────────────
 if [ -z "$OPENGATE_API_KEY" ]; then echo "❌ OPENGATE_API_KEY not set"; exit 1; fi
@@ -36,4 +36,4 @@ if ! python3 -c "import fastapi" 2>/dev/null; then
 fi
 
 # ─── Start server ───────────────────────────────────────────────
-exec python3 -m uvicorn server.main:app --host "$HOST" --port 9090 --log-level info
+exec python3 -m uvicorn server.main:app --host "$HOST" --port "$PORT" --log-level info

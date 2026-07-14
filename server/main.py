@@ -149,7 +149,6 @@ async def delete_session(user_id: str):
     if user_id in agents:
         a = agents.pop(user_id)
         try:
-            from core.composio_client import ComposioClient
             ComposioClient().delete_session(a.session_id)
         except Exception:
             pass
