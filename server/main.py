@@ -4,9 +4,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
+import time
+import uuid
+from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,13 +21,34 @@ from core.agent import ZenAgent
 from core.composio_client import ComposioClient, ComposioAPIError
 from core.llm_client import LLMResponse
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+# Configure structured logging
+_log_fmt = config.log_format
+if _log_fmt == "json":
+    class JsonFormatter(logging.Formatter):
+        def format(self, record):
+            return json.dumps({
+                "ts": self.formatTime(record),
+                "level": record.levelname,
+                "logger": record.name,
+                "msg": record.getMessage(),
+                "module": record.module,
+                "line": record.lineno,
+            })
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(JsonFormatter())
+    logging.basicConfig(level=getattr(logging, config.log_level.upper(), logging.INFO), handlers=[_handler])
+else:
+    logging.basicConfig(
+        level=getattr(logging, config.log_level.upper(), logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
 logger = logging.getLogger("zen-server")
 
 # ── Agent store ─────────────────────────────────────────────
 agents: Dict[str, ZenAgent] = {}
 
 MAX_AGENTS = 200
+_start_time = time.time()
 
 
 def get_agent(user_id: str, session_id: Optional[str] = None) -> ZenAgent:
@@ -67,16 +92,72 @@ class SessionInfo(BaseModel):
     message_count: int
 
 
+# ── Rate limiter (in-memory sliding window) ───────────────
+_rate_limit_store: Dict[str, List[float]] = {}
+
+def _rate_limit(request: Request) -> bool:
+    ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    window = 60.0
+    if ip not in _rate_limit_store:
+        _rate_limit_store[ip] = []
+    _rate_limit_store[ip] = [t for t in _rate_limit_store[ip] if now - t < window]
+    if len(_rate_limit_store[ip]) >= config.rate_limit_per_minute:
+        return False
+    _rate_limit_store[ip].append(now)
+    return True
+
+
+# ── Lifespan (graceful startup/shutdown) ──────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Starting Zen Agent server")
+    logger.info("Model: %s | Port: %d | Rate limit: %d/min", config.opencode_model, config.port, config.rate_limit_per_minute)
+    yield
+    logger.info("Shutting down, cleaning up %d agent(s)...", len(agents))
+    for uid, agent in list(agents.items()):
+        try:
+            ComposioClient().delete_session(agent.session_id)
+        except Exception:
+            pass
+    agents.clear()
+    logger.info("Shutdown complete")
+
+
 # ── App ─────────────────────────────────────────────────────
-app = FastAPI(title="Zen Agent", description="AI agent with 23,790 Composio tools", version="3.0.0")
+app = FastAPI(
+    title="Zen Agent",
+    description="AI agent with 23,790+ Composio tools via REST + WebSocket",
+    version="3.1.0",
+    lifespan=lifespan,
+)
+
+# Parse CORS origins
+_cors_origins = config.cors_origins
+if _cors_origins and _cors_origins != "*":
+    _cors_list = [o.strip() for o in _cors_origins.split(",")]
+else:
+    _cors_list = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── Middleware: rate limit + request ID ─────────────────────
+@app.middleware("http")
+async def middleware(request: Request, call_next):
+    if request.url.path.startswith("/api/"):
+        if not _rate_limit(request):
+            return JSONResponse(status_code=429, content={"error": "Rate limit exceeded", "retry_after": 60})
+    req_id = request.headers.get("X-Request-ID", uuid.uuid4().hex[:12])
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = req_id
+    return response
 
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.isdir(static_dir):
@@ -85,13 +166,16 @@ if os.path.isdir(static_dir):
 
 # ── REST API ────────────────────────────────────────────────
 @app.get("/api/health")
-async def health():
+async def health(request: Request):
     return {
         "status": "ok",
+        "version": "3.1.0",
         "model": config.opencode_model,
         "composio": "connected",
         "agents_active": len(agents),
         "max_tokens": config.opencode_max_tokens,
+        "rate_limit": config.rate_limit_per_minute,
+        "uptime_sec": int(time.time() - _start_time) if _start_time else 0,
     }
 
 
@@ -99,8 +183,8 @@ async def health():
 async def chat(req: ChatReq):
     if not req.message.strip():
         raise HTTPException(400, "Message required")
-    if len(req.message) > 100000:
-        raise HTTPException(400, "Message too long (max 100k chars)")
+    if len(req.message) > config.max_message_length:
+        raise HTTPException(400, f"Message too long (max {config.max_message_length:,} chars)")
     agent = get_agent(req.user_id, req.session_id)
     try:
         resp = agent.chat(req.message)
@@ -176,8 +260,12 @@ async def search_tools(query: str, user_id: str = "web-user"):
 async def get_config():
     return {
         "model": config.opencode_model,
+        "fallback_model": config.opencode_fallback_model or None,
         "max_tokens": config.opencode_max_tokens,
         "max_history": config.max_history_messages,
+        "data_dir": config.data_dir,
+        "rate_limit": config.rate_limit_per_minute,
+        "max_message_length": config.max_message_length,
     }
 
 
@@ -207,8 +295,8 @@ async def ws_chat(websocket: WebSocket, user_id: str):
                 agent.clear_history()
                 await websocket.send_json({"type": "clear"})
                 continue
-            if len(msg) > 100000:
-                await websocket.send_json({"type": "error", "message": "Message too long (max 100k chars)"})
+            if len(msg) > config.max_message_length:
+                await websocket.send_json({"type": "error", "message": f"Message too long (max {config.max_message_length:,} chars)"})
                 continue
             full = ""
             try:

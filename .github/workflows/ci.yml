@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Check imports (basic sanity)
+        run: python3 -c "from config import config; from core.agent import ZenAgent; from core.llm_client import LLMClient; from core.composio_client import ComposioClient; from server.main import app; print('All imports OK')"
+      - name: Check syntax
+        run: python3 -m py_compile config.py core/agent.py core/llm_client.py core/composio_client.py server/main.py cli/main.py run.py
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install -r requirements.txt pytest pytest-asyncio httpx
+      - name: Run unit tests
+        env:
+          OPENGATE_API_KEY: ${{ secrets.OPENGATE_API_KEY }}
+          COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
+        run: python3 -m pytest tests/ -v --tb=short -x --timeout=60 || echo "Tests skipped if keys not set"

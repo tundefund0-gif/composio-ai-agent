@@ -5,6 +5,8 @@ import json
 import os
 import sys
 import time
+from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -17,10 +19,11 @@ from rich.spinner import Spinner
 from rich import box
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from config import config as zen_config
 from core.agent import ZenAgent
 from core.llm_client import LLMResponse
 
-app = typer.Typer(help="Zen Agent — AI assistant with 1,000+ Composio tools")
+app = typer.Typer(help="Zen Agent — AI assistant with 23,790+ Composio tools")
 console = Console()
 
 
@@ -46,7 +49,7 @@ def interactive(
         f"Max tokens: {agent._llm.max_tokens:,}",
         border_style="cyan",
     ))
-    console.print("[dim]Type /clear to reset, /info for stats, /quit to exit[/dim]\n")
+    console.print("[dim]Type /clear to reset, /info for stats, /save to save, /load to restore,\n  /export for markdown, /tokens for usage, /quit to exit[/dim]\n")
 
     while True:
         try:
@@ -68,6 +71,42 @@ def interactive(
             t.add_column("Value")
             for k, v in info.items():
                 t.add_row(k, str(v))
+            console.print(t)
+            continue
+
+        if prompt.strip().lower() == "/save":
+            path = agent.save_session()
+            console.print(f"[green]Session saved to {path}[/green]")
+            continue
+
+        if prompt.strip().lower() == "/load":
+            # Load most recent session file for this user
+            history_dir = Path(config.data_dir) / "conversations"
+            if history_dir.exists():
+                files = sorted(history_dir.glob(f"{agent.user_id}_*.json"), reverse=True)
+                if files:
+                    agent.load_session(str(files[0]))
+                    console.print(f"[green]Session loaded from {files[0]} ({len(agent.get_history())} messages)[/green]")
+                else:
+                    console.print("[yellow]No saved sessions found[/yellow]")
+            else:
+                console.print("[yellow]No saved sessions found[/yellow]")
+            continue
+
+        if prompt.strip().lower() == "/export":
+            path = agent.export_markdown()
+            console.print(f"[green]Conversation exported to {path}[/green]")
+            continue
+
+        if prompt.strip().lower() == "/tokens":
+            usage = agent.total_token_usage()
+            t = Table(box=box.SIMPLE)
+            t.add_column("Metric", style="cyan")
+            t.add_column("Value")
+            t.add_row("Input chars", f"{usage['input_chars']:,}")
+            t.add_row("Output chars", f"{usage['output_chars']:,}")
+            t.add_row("Tool calls", str(usage['tool_calls']))
+            t.add_row("Messages", str(usage['message_count']))
             console.print(t)
             continue
 
@@ -96,6 +135,86 @@ def interactive(
                       f"Length: {len(full):,} chars | "
                       f"History: {len(agent._messages) // 2} turns[/dim]")
         console.print()
+
+
+@app.command()
+def export(
+    user: str = typer.Option("cli-user", "--user", "-u"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path"),
+    fmt: str = typer.Option("markdown", "--format", "-f", help="Export format (markdown)"),
+):
+    """Export conversation as Markdown."""
+    agent = _get_agent(user)
+    with console.status("[yellow]Exporting...[/yellow]"):
+        path = agent.export_markdown(output)
+    console.print(f"[green]Exported to {path}[/green]")
+
+@app.command()
+def tokens(
+    user: str = typer.Option("cli-user", "--user", "-u"),
+):
+    """Show token usage statistics."""
+    agent = _get_agent(user)
+    usage = agent.total_token_usage()
+    t = Table(box=box.SIMPLE)
+    t.add_column("Metric", style="cyan")
+    t.add_column("Value")
+    t.add_row("Input chars", f"{usage['input_chars']:,}")
+    t.add_row("Output chars", f"{usage['output_chars']:,}")
+    t.add_row("Tool calls", str(usage['tool_calls']))
+    t.add_row("Messages", str(usage['message_count']))
+    console.print(t)
+
+@app.command()
+def config(
+    key: Optional[str] = typer.Argument(None, help="Config key to view"),
+):
+    """View current configuration."""
+    if key:
+        val = getattr(zen_config, key, None)
+        if val is not None:
+            console.print(f"[cyan]{key}:[/cyan] {val}")
+        else:
+            console.print(f"[red]Unknown config key: {key}[/red]")
+    else:
+        t = Table(box=box.SIMPLE)
+        t.add_column("Key", style="cyan")
+        t.add_column("Value")
+        for k in dir(zen_config):
+            if k.startswith("_"):
+                continue
+            v = getattr(zen_config, k)
+            # Mask keys
+            if "key" in k.lower() and v:
+                v = v[:12] + "..." if len(v) > 12 else "***"
+            t.add_row(k, str(v))
+        console.print(t)
+
+@app.command()
+def history(
+    user: str = typer.Option("cli-user", "--user", "-u"),
+    limit: int = typer.Option(20, "--limit", "-l", help="Number of messages to show"),
+):
+    """Show recent conversation history."""
+    agent = _get_agent(user)
+    msgs = agent.get_history()
+    if not msgs:
+        console.print("[yellow]No conversation history[/yellow]")
+        return
+    for msg in msgs[-limit:]:
+        role = msg.get("role", "?")
+        text = (msg.get("content", "") or "")[:200]
+        if role == "user":
+            console.print(f"[bold green]You:[/bold green] {text}")
+        elif role == "assistant":
+            tc = msg.get("tool_calls")
+            if tc:
+                tools = ", ".join(t.get("function", {}).get("name", "?") for t in tc)
+                console.print(f"[bold blue]AI (tools: {tools}):[/bold blue] {text[:100]}")
+            else:
+                console.print(f"[bold blue]AI:[/bold blue] {text}")
+        elif role == "tool":
+            console.print(f"[dim]Tool result: {text[:80]}...[/dim]")
 
 
 @app.command()

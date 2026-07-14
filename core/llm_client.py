@@ -62,11 +62,15 @@ class LLMClient:
         self.base_url = (base_url or config.opencode_base_url).rstrip("/")
         self.model = model or config.opencode_model
         self.max_tokens = max_tokens or config.opencode_max_tokens
+        # Fallback model support
+        self.fallback_model = config.opencode_fallback_model or None
+        self.fallback_base_url = config.opencode_fallback_base_url or None
+        self.fallback_api_key = config.opencode_fallback_api_key or None
 
     def chat(self, messages: List[Dict[str, Any]], temperature: float = 0.7,
              stream: bool = False, tools: Optional[List[Dict]] = None,
              retries: int = 2) -> Union[LLMResponse, Generator[str, None, None]]:
-        """Send a chat request with automatic retry on failure."""
+        """Send a chat request with automatic retry and optional model fallback on failure."""
         body = {
             "model": self.model,
             "messages": messages,
@@ -92,12 +96,48 @@ class LLMClient:
             except LLMError as e:
                 last_err = e
                 if not e.retryable:
+                    # Try fallback model if available before giving up
+                    if self.fallback_model and attempt >= retries:
+                        logger.info("Primary model failed, trying fallback: %s", self.fallback_model)
+                        return self._fallback_chat(messages, temperature, tools, retries)
                     raise
                 logger.warning("LLM call attempt %d/%d failed: %s", attempt + 1, retries + 1, e)
                 if attempt < retries:
                     delay = e.retry_after if e.retry_after is not None else 1.5 * (attempt + 1)
                     time.sleep(delay)
+
+        # Try fallback after all retries exhausted
+        if self.fallback_model:
+            logger.info("All retries exhausted, trying fallback model: %s", self.fallback_model)
+            return self._fallback_chat(messages, temperature, tools, retries)
         raise LLMError(f"LLM API failed after {retries + 1} attempts: {last_err}")
+
+    def _fallback_chat(self, messages, temperature, tools, retries):
+        """Execute chat using fallback model configuration."""
+        original_model = self.model
+        original_url = self.base_url
+        original_key = self.api_key
+        try:
+            self.model = self.fallback_model
+            if self.fallback_base_url:
+                self.base_url = self.fallback_base_url.rstrip("/")
+            if self.fallback_api_key:
+                self.api_key = self.fallback_api_key
+            body = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": self.max_tokens,
+                "stream": False,
+            }
+            if tools:
+                body["tools"] = tools
+            logger.info("Falling back to model=%s at %s", self.model, self.base_url)
+            return self._sync(body)
+        finally:
+            self.model = original_model
+            self.base_url = original_url
+            self.api_key = original_key
 
     def _sync(self, body: Dict) -> LLMResponse:
         with httpx.Client(timeout=config.llm_timeout) as cl:

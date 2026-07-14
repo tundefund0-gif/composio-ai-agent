@@ -1,0 +1,31 @@
+# ─── Zen Agent — Systemd Service ────────────────────────────────
+# Install: sudo cp zen-agent.service /etc/systemd/system/
+# Then:    sudo systemctl daemon-reload
+#          sudo systemctl enable zen-agent
+#          sudo systemctl start zen-agent
+
+[Unit]
+Description=Zen Agent — AI assistant with 23,790+ Composio tools
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zen-agent
+Group=zen-agent
+WorkingDirectory=/opt/zen-agent
+EnvironmentFile=/opt/zen-agent/.env
+ExecStart=/usr/bin/python3 -m uvicorn server.main:app --host 0.0.0.0 --port 9090 --log-level info
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
 from config import config
@@ -191,12 +194,17 @@ Current UTC time: {datetime.now(timezone.utc).isoformat()}
         self._messages = []
 
     def get_info(self) -> Dict:
+        usage = self.total_token_usage()
         return {
             "user_id": self.user_id,
             "session_id": self.session_id,
             "sandbox_enabled": self.enable_sandbox,
             "toolkits": self.toolkits,
+            "model": self._llm.model,
             "message_count": len(self._messages),
+            "total_input_chars": usage["input_chars"],
+            "total_output_chars": usage["output_chars"],
+            "total_tool_calls": usage["tool_calls"],
         }
 
     # ── Sync path (REST) ─────────────────────────────────────
@@ -294,6 +302,93 @@ Current UTC time: {datetime.now(timezone.utc).isoformat()}
             gen = self._llm.chat(msgs, stream=True, retries=1)
             if not isinstance(gen, Generator):
                 break
+
+    # ── Session persistence ──────────────────────────────────
+    @property
+    def _history_dir(self) -> Path:
+        p = Path(config.data_dir) / "conversations"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def save_session(self, path: Optional[str] = None) -> str:
+        """Save conversation history to a JSON file. Returns the file path."""
+        if path is None:
+            path = str(self._history_dir / f"{self.user_id}_{uuid.uuid4().hex[:12]}.json")
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "version": 2,
+            "user_id": self.user_id,
+            "session_id": self.session_id,
+            "toolkits": self.toolkits,
+            "sandbox_enabled": self.enable_sandbox,
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+            "messages": self._messages,
+        }
+        p.write_text(json.dumps(data, indent=2, default=str))
+        logger.info("Session saved to %s (%d messages)", p, len(self._messages))
+        return str(p)
+
+    def load_session(self, path: str) -> None:
+        """Load conversation history from a JSON file."""
+        p = Path(path)
+        if not p.exists():
+            raise FileNotFoundError(f"Session file not found: {path}")
+        data = json.loads(p.read_text())
+        ver = data.get("version", 1)
+        self._messages = data.get("messages", [])
+        if ver < 2:
+            self._messages = [m for m in self._messages if m.get("role") != "system"]
+        logger.info("Session loaded from %s (%d messages)", p, len(self._messages))
+
+    def export_markdown(self, path: Optional[str] = None) -> str:
+        """Export conversation as Markdown. Returns the file path."""
+        if path is None:
+            path = str(self._history_dir / f"{self.user_id}_{uuid.uuid4().hex[:12]}.md")
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        parts = [f"# Zen Agent - Conversation", f"User: {self.user_id}"]
+        for msg in self._messages:
+            role = msg.get("role", "unknown")
+            text = msg.get("content", "") or ""
+            if role == "user":
+                parts.append("\n## 👤 You\n\n" + text + "\n")
+            elif role == "assistant":
+                tc = msg.get("tool_calls")
+                if tc:
+                    fn_list = ", ".join(t.get("function", {}).get("name", "?") for t in tc)
+                    parts.append("\n## 🤖 AI (calling " + fn_list + ")\n\n" + text + "\n")
+                else:
+                    parts.append("\n## 🤖 AI\n\n" + text + "\n")
+            elif role == "tool":
+                snippet = text[:200] + "..." if len(text) > 200 else text
+                parts.append("\n**Tool result:** `" + snippet + "`\n")
+        p.write_text("".join(parts))
+        return str(p)
+
+    def total_token_usage(self) -> Dict[str, int]:
+        """Calculate cumulative token usage from all LLM responses stored in messages."""
+        total_input = 0
+        total_output = 0
+        total_tool_calls = 0
+        for msg in self._messages:
+            if msg.get("role") == "assistant":
+                tc = msg.get("tool_calls")
+                if tc:
+                    total_tool_calls += len(tc)
+        # Estimate: count chars as rough proxy when we don't have actual token counts
+        for msg in self._messages:
+            content = msg.get("content", "") or ""
+            if msg.get("role") == "user":
+                total_input += len(content)
+            elif msg.get("role") == "assistant":
+                total_output += len(content)
+        return {
+            "input_chars": total_input,
+            "output_chars": total_output,
+            "tool_calls": total_tool_calls,
+            "message_count": len(self._messages),
+        }
 
     # ── Tool execution ───────────────────────────────────────
     def _exec_composio(self, action: str, args: Dict) -> Dict[str, Any]:
