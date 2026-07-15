@@ -119,6 +119,10 @@ html,body{height:100%;overflow:hidden;font-family:'Inter',system-ui,sans-serif;b
 /* Auto-scroll toggle */
 #autoScrollBtn{transition:opacity 0.2s}
 
+/* Modal overlay */
+.modal-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:1000;animation:fadeIn 0.2s ease}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;max-width:90%;width:100%;box-shadow:0 8px 32px rgba(0,0,0,0.3)}
+
 /* Status messages */
 .msg.status{padding:4px 16px;text-align:center;display:flex;justify-content:center}
 .status-badge{display:inline-block;background:var(--accent-subtle);color:var(--accent);border:1px solid var(--accent);border-radius:20px;padding:4px 14px;font-size:0.75rem;font-weight:500;letter-spacing:0.01em;animation:fadeIn 0.3s ease}
@@ -668,6 +672,15 @@ function finishStream(full) {
     }
     msgLen = full.length;
     chatMessages.push({ role: 'assistant', content: full });
+    // Add token badge to last assistant message
+    const lastMsg = document.querySelector('#messages .message:last-child .msg-bubble');
+    if (lastMsg && !lastMsg.querySelector('.token-badge-done')) {
+      const badge = document.createElement('span');
+      badge.className = 'token-badge-done';
+      badge.textContent = msgLen + ' chars';
+      badge.style.cssText = 'font-size:0.6rem;color:var(--text3);padding:2px 6px;border-radius:4px;background:var(--surface2);margin-left:8px;white-space:nowrap';
+      lastMsg.appendChild(badge);
+    }
     if (currentChatId && chats[currentChatId]) {
       chats[currentChatId].messages = chatMessages.slice();
       const firstUser = chatMessages.find(m => m.role === 'user');
@@ -847,6 +860,37 @@ function copyCode(btn) {
   }).catch(() => {});
 }
 
+function showSystemPrompt() {
+  const modal = document.getElementById('sysPromptModal');
+  const content = document.getElementById('sysPromptContent');
+  if (!modal || !content) return;
+  content.textContent = 'Loading...';
+  modal.style.display = 'flex';
+  fetch('/api/system-prompt/web-user').then(r => r.json()).then(d => {
+    content.textContent = d.prompt || 'N/A';
+  }).catch(() => { content.textContent = 'Failed to load system prompt.'; });
+}
+
+function closeSysPrompt() {
+  const modal = document.getElementById('sysPromptModal');
+  if (modal) modal.style.display = 'none';
+}
+
+function downloadConversation() {
+  if (!chatMessages.length) { showToast('No messages to download', 'error'); return; }
+  const lines = ['# Zen Agent - Conversation', '', ''];
+  chatMessages.forEach(m => {
+    if (m.role === 'user') lines.push('## 👤 You', '', m.content.replace(/\n/g, '\n'), '');
+    else lines.push('## 🤖 AI', '', m.content.replace(/\n/g, '\n'), '');
+  });
+  const blob = new Blob([lines.join('\n')], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'zen-chat-' + new Date().toISOString().slice(0,10) + '.md';
+  a.click(); URL.revokeObjectURL(url);
+  showToast('Downloaded!', 'success');
+}
+
 function copyConversation() {
   if (!chatMessages.length) { showToast('No messages to copy', 'error'); return; }
   const text = chatMessages.map(m => (m.role === 'user' ? '👤 You: ' : '🤖 AI: ') + m.content).join('\n\n---\n\n');
@@ -928,5 +972,16 @@ function updateSendBtn() {
   if (btn) btn.disabled = !document.getElementById('chatInput').value.trim() || isStreaming;
 }
 </script>
+<!-- System prompt modal -->
+<div id="sysPromptModal" class="modal-overlay" onclick="if(event.target===this)closeSysPrompt()" style="display:none">
+  <div class="modal" style="max-width:700px;max-height:80vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <h3 style="margin:0">🧠 System Prompt</h3>
+      <button onclick="closeSysPrompt()" style="background:none;border:none;color:var(--text2);font-size:1.2rem;cursor:pointer">✕</button>
+    </div>
+    <pre id="sysPromptContent" style="background:var(--surface2);padding:12px;border-radius:8px;font-size:0.78rem;line-height:1.5;overflow-x:auto;white-space:pre-wrap;word-break:break-word;max-height:60vh;overflow-y:auto;margin:0"></pre>
+  </div>
+</div>
+
 </body>
 </html>

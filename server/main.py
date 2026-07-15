@@ -215,6 +215,12 @@ async def chat(req: ChatReq):
         raise HTTPException(500, str(e)[:500])
 
 
+@app.get("/api/system-prompt/{user_id}")
+async def get_system_prompt(user_id: str = "web-user"):
+    agent = get_agent(user_id)
+    prompt = agent._sysprompt() if hasattr(agent, '_sysprompt') else "N/A"
+    return {"prompt": prompt}
+
 @app.get("/api/session/{user_id}", response_model=SessionInfo)
 async def get_session(user_id: str):
     agent = get_agent(user_id)
@@ -326,7 +332,8 @@ async def ws_chat(websocket: WebSocket, user_id: str):
                     except Exception as send_err:
                         logger.warning("WS send failed (likely disconnected): %s", send_err)
                         break
-                await websocket.send_json({"type": "done", "content": full})
+                usage_info = agent.total_token_usage() if hasattr(agent, 'total_token_usage') else {}
+                await websocket.send_json({"type": "done", "content": full, "tokens": usage_info.get("message_count", 0)})
             except WebSocketDisconnect:
                 logger.info("WS disconnected during chat: %s", user_id)
             except Exception as e:
