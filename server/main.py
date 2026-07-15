@@ -295,13 +295,16 @@ async def get_config():
 async def ws_chat(websocket: WebSocket, user_id: str):
     await websocket.accept()
     agent = get_agent(user_id)
-    await websocket.send_json({
-        "type": "info",
-        "session_id": agent.session_id,
-        "user_id": user_id,
-        "model": config.opencode_model,
-        "max_tokens": config.opencode_max_tokens,
-    })
+    try:
+        await websocket.send_json({
+            "type": "info",
+            "session_id": agent.session_id,
+            "user_id": user_id,
+            "model": config.opencode_model,
+            "max_tokens": config.opencode_max_tokens,
+        })
+    except Exception:
+        return
     try:
         while True:
             raw = await websocket.receive_text()
@@ -317,7 +320,7 @@ async def ws_chat(websocket: WebSocket, user_id: str):
                 await websocket.send_json({"type": "clear"})
                 continue
             if msg.strip().lower() == "/ping":
-                await websocket.send_json({"type": "pong"})
+                # Silently ignore - ping is just to keep connection alive
                 continue
             if len(msg) > config.max_message_length:
                 await websocket.send_json({"type": "error", "message": f"Message too long (max {config.max_message_length:,} chars)"})
@@ -359,8 +362,7 @@ async def ws_chat(websocket: WebSocket, user_id: str):
                         await websocket.send_json({"type": "status", "content": token[11:]})
                     else:
                         await websocket.send_json({"type": "token", "content": token})
-                except Exception as send_err:
-                    logger.warning("WS send failed (likely disconnected): %s", send_err)
+                except Exception:
                     break
             
             usage_info = agent.total_token_usage() if hasattr(agent, 'total_token_usage') else {}
