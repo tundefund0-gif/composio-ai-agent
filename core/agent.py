@@ -65,34 +65,22 @@ def _parse_dsml_tool_calls(text):
     
     # --- Format 2: DSML/XML <[||]tool_calls> with <[||]invoke> tags ---
     if not calls:
-        outer = _re.search(
-            _re.compile(
-                "<" + "(?:[" + chr(124) + "][" + chr(124) + "]DSML[" + chr(124) + "][" + chr(124) + "])?"
-                "tool_calls[^>]*>(.*?)</"
-                "(?:[" + chr(124) + "][" + chr(124) + "]DSML[" + chr(124) + "][" + chr(124) + "])?tool_calls[^>]*>",
-                _re.DOTALL
-            ),
-            text
-        )
+        # Pattern: optional ||DSML|| prefix before tag names
+        _pd = r"(?:[|]{2}DSML[|]{2})?"
+        outer = _re.search(_pd + r"<tool_calls[^>]*>(.*?)</" + _pd + r"tool_calls[^>]*>", text, _re.DOTALL)
         inner = outer.group(1) if outer else text
         
         # Parse individual <invoke> tags
-        tag_re = _re.compile(
-            "<" + "(?:[" + chr(124) + "][" + chr(124) + "]DSML[" + chr(124) + "][" + chr(124) + "])?"
-            "invoke" + chr(32) + "+name=" + chr(34) + "([a-zA-Z_]\\w*)" + chr(34)
-            + "[^>]*>(.*?)</"
-            + "(?:[" + chr(124) + "][" + chr(124) + "]DSML[" + chr(124) + "][" + chr(124) + "])?invoke[^>]*>",
-            _re.DOTALL
+        invokes = _re.findall(
+            _pd + r'<invoke\s+name="([a-zA-Z_]\w*)"[^>]*>(.*?)</' + _pd + r'invoke[^>]*>',
+            inner, _re.DOTALL
         )
-        invokes = tag_re.findall(inner)
         if invokes:
-            param_re = _re.compile(
-                "<" + "(?:[" + chr(124) + "][" + chr(124) + "]DSML[" + chr(124) + "][" + chr(124) + "])?"
-                "parameter" + chr(32) + "+name=" + chr(34) + "([a-zA-Z_]\\w*)" + chr(34)
-                + "[^>]*>(.*?)</"
-                + "(?:[" + chr(124) + "][" + chr(124) + "]DSML[" + chr(124) + "][" + chr(124) + "])?parameter[^>]*>",
-                _re.DOTALL
-            )
+            for name, body in invokes:
+                params = _re.findall(
+                    _pd + r'<parameter\s+name="([a-zA-Z_]\w*)"[^>]*>(.*?)</' + _pd + r'parameter[^>]*>',
+                    body, _re.DOTALL
+                )
             for name, body in invokes:
                 params = param_re.findall(body)
                 args = {}

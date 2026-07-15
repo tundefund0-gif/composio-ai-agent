@@ -116,6 +116,9 @@ html,body{height:100%;overflow:hidden;font-family:'Inter',system-ui,sans-serif;b
 .msg-bubble div:hover > .code-copy-btn,.msg-bubble pre:hover + .code-copy-btn,.code-copy-btn:hover{opacity:1}
 .code-copy-btn:hover{background:var(--accent-subtle);color:var(--accent)}
 
+/* Auto-scroll toggle */
+#autoScrollBtn{transition:opacity 0.2s}
+
 /* Status messages */
 .msg.status{padding:4px 16px;text-align:center;display:flex;justify-content:center}
 .status-badge{display:inline-block;background:var(--accent-subtle);color:var(--accent);border:1px solid var(--accent);border-radius:20px;padding:4px 14px;font-size:0.75rem;font-weight:500;letter-spacing:0.01em;animation:fadeIn 0.3s ease}
@@ -687,15 +690,44 @@ function finishStream(full) {
 }
 
 // ─── Scroll ────────────────────────────────────────────
+let autoScroll = true;
+
+function toggleAutoScroll() {
+  autoScroll = !autoScroll;
+  const btn = document.getElementById('autoScrollBtn');
+  if (btn) {
+    btn.style.opacity = autoScroll ? '1' : '0.4';
+    btn.title = autoScroll ? 'Auto-scroll: ON' : 'Auto-scroll: OFF';
+  }
+  if (autoScroll) scrollToBottom(true);
+}
+
 function initScrollTracking() {
   const el = document.getElementById('messages');
   if (!el) return;
   el.addEventListener('scroll', () => { userScrolled = (el.scrollHeight - el.scrollTop - el.clientHeight) > 80; });
+  // Keyboard shortcuts
+  document.addEventListener('keydown', (e) => {
+    // Ctrl+Enter or Cmd+Enter to send
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      sendMessage();
+    }
+    // Ctrl+L or Cmd+L to clear chat
+    if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
+      e.preventDefault();
+      if (confirm('Clear current conversation?')) {
+        chatMessages = [];
+        renderMessages([]);
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ message: '/clear' }));
+      }
+    }
+  });
 }
 function scrollToBottom(force) {
   const el = document.getElementById('messages');
   if (!el) return;
-  if (force || !userScrolled) el.scrollTop = el.scrollHeight;
+  if (force || (!userScrolled && autoScroll)) el.scrollTop = el.scrollHeight;
 }
 
 // ─── Send ──────────────────────────────────────────────
@@ -813,6 +845,12 @@ function copyCode(btn) {
     btn.textContent = '✅';
     setTimeout(() => btn.textContent = '📋', 2000);
   }).catch(() => {});
+}
+
+function copyConversation() {
+  if (!chatMessages.length) { showToast('No messages to copy', 'error'); return; }
+  const text = chatMessages.map(m => (m.role === 'user' ? '👤 You: ' : '🤖 AI: ') + m.content).join('\n\n---\n\n');
+  navigator.clipboard.writeText(text).then(() => showToast('Copied!', 'success')).catch(() => showToast('Failed to copy', 'error'));
 }
 
 function escHtml(t) {
