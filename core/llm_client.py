@@ -84,7 +84,26 @@ class LLMClient:
             body["tools"] = tools
 
         if stream:
-            return self._stream(body)
+            import random as _random
+            last_err = None
+            for attempt in range(retries + 1):
+                try:
+                    return self._stream(body)
+                except (httpx.TimeoutException, httpx.ConnectError) as e:
+                    last_err = e
+                    logger.warning("Streaming LLM call attempt %d/%d failed: %s", attempt + 1, retries + 1, e)
+                    if attempt < retries:
+                        delay = 1.0 * (2 ** attempt) + _random.uniform(0, 0.5)
+                        time.sleep(delay)
+                except LLMError as e:
+                    last_err = e
+                    if not e.retryable:
+                        raise
+                    logger.warning("Streaming LLM call attempt %d/%d failed: %s", attempt + 1, retries + 1, e)
+                    if attempt < retries:
+                        delay = e.retry_after if e.retry_after is not None else 1.0 * (2 ** attempt) + _random.uniform(0, 0.5)
+                        time.sleep(delay)
+            raise last_err or LLMError("Streaming LLM call failed after all retries")
 
         import random as _random
         last_err = None

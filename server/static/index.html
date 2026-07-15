@@ -430,6 +430,7 @@ function switchPage(name) {
 
 // ─── WebSocket ─────────────────────────────────────────
 let wsKeepaliveTimer = null;
+let _streamingRawText = '';  // Raw accumulated text during streaming for proper markdown rendering
 
 function connectWS() {
   if (ws) try { ws.close(); } catch(e) {}
@@ -478,7 +479,13 @@ function handleWS(d) {
     case 'token': appendToken(d.content); break;
     case 'status': appendStatus(d.content); break;
     case 'reasoning': appendReasoning(d.content); break;
-    case 'done': finishStream(d.content); break;
+    case 'done':
+      finishStream(d.content);
+      if (d.tokens !== undefined) {
+        const el = document.getElementById('sysMessages');
+        if (el) el.textContent = d.tokens;
+      }
+      break;
     case 'clear': clearChat(); break;
     case 'pong': break; /* keepalive */
     case 'error': showToast(d.message || 'Error', 'error'); finishStream(null); break;
@@ -535,6 +542,7 @@ async function startNewChat() {
   chats[currentChatId] = { id: currentChatId, title: 'New Conversation', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messages: [] };
   chatMessages = [];
   _reasoningBuf = '';
+  _streamingRawText = '';
   renderMessages([]);
   localStorage.setItem('za-activeChat', currentChatId);
   saveChats();
@@ -643,7 +651,9 @@ function appendToken(text) {
   if (aiMsgEl) {
     const span = aiMsgEl.querySelector('span.cursor');
     if (span) span.remove();
-    aiMsgEl.innerHTML = renderMarkdown((aiMsgEl.textContent || '') + text) + '<span class="cursor"></span>';
+    // Accumulate raw text and re-render full markdown to preserve formatting
+    _streamingRawText += text;
+    aiMsgEl.innerHTML = renderMarkdown(_streamingRawText) + '<span class="cursor"></span>';
     scrollToBottom();
   }
 }
@@ -725,6 +735,7 @@ function finishStream(full) {
   document.getElementById('sendBtn').style.display = 'flex';
   document.getElementById('stopBtn').style.display = 'none';
   _reasoningBuf = '';
+  _streamingRawText = '';
   document.querySelectorAll('.thinking-pulse').forEach(p => p.classList.add('done'));
   updateSendBtn();
   scrollToBottom();
@@ -840,7 +851,7 @@ function abortStream() {
 }
 
 function clearChat() {
-  chatMessages = []; renderMessages([]);
+  chatMessages = []; _streamingRawText = ''; _reasoningBuf = ''; renderMessages([]);
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ message: '/clear' }));
 }
 function sendSuggestion(text) {
@@ -854,6 +865,13 @@ function updateStatus(text) {
   if (el) {
     const isOk = text === 'Online' || text === 'Connected';
     el.innerHTML = '<span class="info-badge ' + (isOk ? 'badge-ok' : text === 'Offline' ? 'badge-err' : 'badge-warn') + '">' + text + '</span>';
+  }
+  // Also update system page status indicator
+  const sysEl = document.getElementById('sysStatus');
+  if (sysEl) {
+    if (text === 'Online') sysEl.textContent = '🟢 Online';
+    else if (text === 'Offline') sysEl.textContent = '🔴 Offline';
+    else sysEl.textContent = '⚠️ ' + text;
   }
 }
 

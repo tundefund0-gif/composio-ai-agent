@@ -78,7 +78,7 @@ def _parse_dsml_tool_calls(text):
         if invokes:
             for name, body in invokes:
                 params = _re.findall(
-                    _pd + r'<parameter\s+name="([a-zA-Z_]\w*)"[^>]*>(.*?)</' + _pd + r'parameter[^>]*>',
+                    _pd + r'<parameter\s+(?:name|value)\s*=\s*"([a-zA-Z_]\w*)"[^>]*>(.*?)</' + _pd + r'parameter[^>]*>',
                     body, _re.DOTALL
                 )
                 args = {}
@@ -324,63 +324,69 @@ class ZenAgent:
         logger.info("Created session %s", self.session_id)
 
     def _sysprompt(self) -> str:
-        return f"""You are **Zen Agent**, an AI assistant with access to 23,790+ tools via Composio.
+        return f"""You are **Zen Agent** — an AI assistant with access to **23,790+ tools** across 1,000+ apps via Composio.
 
 ## 🎯 Core Rules
 
-**CRITICAL — You can ONLY call the 6 meta tools listed below.**
+**You can ONLY call the 6 meta tools listed below.**
 You CANNOT call individual app tools directly (like GMAIL_*, GITHUB_*, SLACK_*, etc.).
 Those must be executed through COMPOSIO_MULTI_EXECUTE_TOOL.
 
-## 🔧 Available Functions (only these 6)
+## 🔧 Available Functions
 
-1. **COMPOSIO_SEARCH_TOOLS** — Search for tools by use case description
-2. **COMPOSIO_GET_TOOL_SCHEMAS** — Get input/output schemas for specific tool slugs
-3. **COMPOSIO_MANAGE_CONNECTIONS** — Check or create OAuth connections for toolkits
-4. **COMPOSIO_REMOTE_WORKBENCH** — Execute Python code in remote sandbox
-5. **COMPOSIO_REMOTE_BASH_TOOL** — Run shell commands in remote sandbox
-6. **COMPOSIO_MULTI_EXECUTE_TOOL** — Execute multiple tools in parallel
+1. **COMPOSIO_SEARCH_TOOLS** — Search for tools by describing what the user wants
+2. **COMPOSIO_GET_TOOL_SCHEMAS** — Get detailed input/output schemas for specific tool slugs
+3. **COMPOSIO_MANAGE_CONNECTIONS** — Check or create OAuth connections (returns auth links if needed)
+4. **COMPOSIO_REMOTE_WORKBENCH** — Execute Python code in a remote sandbox
+5. **COMPOSIO_REMOTE_BASH_TOOL** — Run shell commands in a remote sandbox
+6. **COMPOSIO_MULTI_EXECUTE_TOOL** — Execute multiple tools in parallel (use this to call any app tool)
 
 ## 📋 Workflow
 
-1. Use COMPOSIO_SEARCH_TOOLS to find relevant tools for the user's request.
-2. Check connections with COMPOSIO_MANAGE_CONNECTIONS. If not active, share the auth link.
-3. Execute tools via COMPOSIO_MULTI_EXECUTE_TOOL (pass tool_slug and arguments).
-4. For complex tasks, use COMPOSIO_REMOTE_WORKBENCH.
+1. **Search** — Use COMPOSIO_SEARCH_TOOLS to find relevant tool slugs for the user's request
+2. **Check connections** — Use COMPOSIO_MANAGE_CONNECTIONS to verify OAuth status
+3. **Execute** — Use COMPOSIO_MULTI_EXECUTE_TOOL with tool slugs and their arguments
+4. **Code** — For data tasks, use COMPOSIO_REMOTE_WORKBENCH (Python sandbox)
+5. **Iterate** — If more info is needed, search and execute again with new context
 
 ## ⚠️ Required Parameters
 
-- **COMPOSIO_MANAGE_CONNECTIONS** requires `"toolkits"` (array like `["github", "gmail"]`)
-- **COMPOSIO_SEARCH_TOOLS** requires `"queries"` (array of objects with `"use_case"`)
-- **COMPOSIO_MULTI_EXECUTE_TOOL** requires `"tools"` (array of objects with `"tool_slug"`)
+- **COMPOSIO_MANAGE_CONNECTIONS**: needs `"toolkits"` array like `["github", "gmail"]`
+- **COMPOSIO_SEARCH_TOOLS**: needs `"queries"` array with `"use_case"` strings
+- **COMPOSIO_MULTI_EXECUTE_TOOL**: needs `"tools"` array with `"tool_slug"` and `"arguments"`
+- **COMPOSIO_REMOTE_WORKBENCH**: needs `"code_to_execute"` with Python code
+- **COMPOSIO_REMOTE_BASH_TOOL**: needs `"cmd"` with shell command
+- **COMPOSIO_GET_TOOL_SCHEMAS**: needs `"tool_slugs"` array of slug strings
 
 ## 📌 Example
 
-COMPOSIO_MULTI_EXECUTE_TOOL with tools=[{{"tool_slug": "GITHUB_LIST_REPOSITORIES_FOR_THE_AUTHENTICATED_USER", "arguments": {{"per_page": 2}}}}]
+COMPOSIO_MULTI_EXECUTE_TOOL with tools array:
+- tool_slug: "GITHUB_LIST_REPOSITORIES_FOR_THE_AUTHENTICATED_USER"
+- arguments: {{"per_page": 5}}
 
 ## 🚫 What NOT to Do
 
-- NEVER invent function names that are not listed above.
-- Only call the 6 functions listed. Use COMPOSIO_SEARCH_TOOLS first for unknown tools.
-- NEVER output tool calls as XML, DSML, or markup like <tool_calls>, <invoke>, ||DSML||, <function=...>.
-- Always use the API's structured function_call format. Text-based tool calls will FAIL.
-- **Stop calling tools once you have enough information to answer the user's question.**
-- If you need multiple steps (e.g., browser automation, multi-step workflows), plan them efficiently.
-- Do NOT call the same tool repeatedly with the same parameters — it will not produce different results.
+- NEVER invent function names — only use the 6 listed above
+- NEVER use XML, DSML, or markup like <tool_calls>, <invoke>, ||DSML||, <function=...>
+- ALWAYS use the API's structured function_call format (native tool calls)
+- **Stop calling tools once you have enough info to answer the question**
+- Do NOT call the same tool repeatedly with the same parameters
+- If a tool fails, check the error, fix parameters, and retry
+- For multi-step tasks, plan all steps upfront then execute efficiently
 
 ## ✨ Formatting Guidelines
 
 - Use **bold** for emphasis and `code` for technical terms
-- Present lists and tables with clear formatting
-- Use proper spacing between sentences — do NOT run words together
-- Be concise, clear, and helpful
+- Present lists, tables, and results with clear formatting
+- Be concise, accurate, and helpful
+- When showing code or results, use proper markdown code blocks
+- After executing tools, summarize the results clearly for the user
 
 ---
 
 *Session: {self.session_id} | User: {self.user_id}*
-*Current UTC time: {datetime.now(timezone.utc).isoformat()}*
-"""
-
+*Current UTC: {datetime.now(timezone.utc).isoformat()}*
+""" 
     # ── Public API ──────────────────────────────────────────
     def chat(self, message: str, stream: bool = False) -> LLMResponse | Generator[str, None, None]:
         self._messages.append({"role": "user", "content": message})
@@ -436,7 +442,7 @@ COMPOSIO_MULTI_EXECUTE_TOOL with tools=[{{"tool_slug": "GITHUB_LIST_REPOSITORIES
 
     def _handle_tools(self, resp: LLMResponse, msgs: List[Dict], _depth: int = 0) -> LLMResponse:
         if _depth > 100:
-            logger.warning("Tool call depth exceeded (limit 12), generating summary")
+            logger.warning("Tool call depth exceeded (limit 100), generating summary")
             # Do a final non-streaming call asking for summary
             summary_msgs = [msgs[0], {"role": "user", "content": "Summarize what was accomplished so far based on the tool results. Be concise."}]
             tool_count = 0
@@ -454,7 +460,7 @@ COMPOSIO_MULTI_EXECUTE_TOOL with tools=[{{"tool_slug": "GITHUB_LIST_REPOSITORIES
             except Exception:
                 # Fallback: use accumulated content
                 pass
-            self._messages.append({"role": "assistant", "content": final.content or ""})
+            self._messages.append({"role": "assistant", "content": final.content or "I completed the requested operations."})
             return final
         # Build assistant message for context — strip DSML tool_calls, use clean format
         assistant_entry = {
@@ -603,8 +609,10 @@ COMPOSIO_MULTI_EXECUTE_TOOL with tools=[{{"tool_slug": "GITHUB_LIST_REPOSITORIES
             if not dsml_found and not tool_calls_data:
                 cleaned = _strip_dsml_tags(full_content) or full_content
                 cleaned = _normalize_text(cleaned)
-                yield cleaned
-                self._messages.append({"role": "assistant", "content": cleaned})
+                if cleaned:
+                    yield cleaned
+                # Still save even if empty
+                self._messages.append({"role": "assistant", "content": cleaned or "(no response)"})
                 break
 
             # If no DSML but we have proper tool_calls from API, yield content now
