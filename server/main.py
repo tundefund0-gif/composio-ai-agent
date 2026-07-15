@@ -341,7 +341,7 @@ async def ws_chat(websocket: WebSocket, user_id: str):
                     stream_error = e
                     return []
             
-            chat_tokens = await loop.run_in_executor(None, _run_chat)
+            chat_tokens = await asyncio.wait_for(loop.run_in_executor(None, _run_chat), timeout=120)
             
             if stream_error:
                 logger.exception("WS chat error for %s", user_id)
